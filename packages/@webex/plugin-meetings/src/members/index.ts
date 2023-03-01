@@ -296,7 +296,7 @@ export default class Members extends StatelessWebexPlugin {
       const delta = this.handleLocusInfoUpdatedParticipants(payload);
       const full = this.handleMembersUpdate(delta); // SDK should propagate the full list for both delta and non delta updates
 
-      this.receiveSlotManager.updateMemberIds();
+      this.receiveSlotManager?.updateMemberIds();
 
       Trigger.trigger(
         this,
@@ -733,15 +733,19 @@ export default class Members extends StatelessWebexPlugin {
   /**
    * Admits waiting members (invited guests to meeting)
    * @param {Array} memberIds
+   * @param {String} authorizingLocusUrl
    * @returns {Promise}
    * @public
    * @memberof Members
    */
-  public admitMembers(memberIds: Array<any>) {
+  public admitMembers(memberIds: Array<any>, authorizingLocusUrl?: string) {
     if (isEmpty(memberIds)) {
       return Promise.reject(new ParameterError('No member ids provided to admit.'));
     }
-    const options = MembersUtil.generateAdmitMemberOptions(memberIds, this.locusUrl);
+    const options = {
+      authorizingLocusUrl,
+      ...MembersUtil.generateAdmitMemberOptions(memberIds, this.locusUrl),
+    };
 
     return this.membersRequest.admitMember(options);
   }
