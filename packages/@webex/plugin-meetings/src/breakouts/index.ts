@@ -10,6 +10,7 @@ import {BREAKOUTS, MEETINGS, HTTP_VERBS} from '../constants';
 import Breakout from './breakout';
 import BreakoutCollection from './collection';
 import BreakoutRequest from './request';
+import {boServiceErrorHandler} from './utils';
 
 /**
  * @class Breakouts
@@ -35,6 +36,7 @@ const Breakouts = WebexPlugin.extend({
     locusUrl: 'string', // the current locus url
     breakoutServiceUrl: 'string', // the current breakout resouce url
     mainLocusUrl: 'string', // the locus url of the main session
+    groups: 'array', // appears when create breakouts
   },
 
   children: {
@@ -50,6 +52,20 @@ const Breakouts = WebexPlugin.extend({
        */
       fn() {
         return this.sessionType === BREAKOUTS.SESSION_TYPES.MAIN;
+      },
+    },
+    breakoutGroupId: {
+      deps: ['groups'],
+      /**
+       * Returns the actived group id
+       * @returns {boolean}
+       */
+      fn() {
+        if (this.groups?.length) {
+          return this.groups[0].id;
+        }
+
+        return '';
       },
     },
   },
@@ -280,9 +296,7 @@ const Breakouts = WebexPlugin.extend({
    * @returns {Promise}
    */
   broadcast(message, options) {
-    const breakoutGroupId = this.isInMainSession
-      ? this.breakouts.filter((breakout) => !breakout.isMain)[0]?.groupId
-      : this.groupId;
+    const {breakoutGroupId} = this;
     if (!breakoutGroupId) {
       throw new Error('Cannot broadcast, no breakout session found');
     }
@@ -355,6 +369,69 @@ const Breakouts = WebexPlugin.extend({
   },
 
   /**
+   * Create new breakout sessions
+   * @param {object} sessions -- breakout session group
+   * @returns {Promise}
+   */
+  async create(sessions) {
+    // @ts-ignore
+    const breakInfo = await this.webex
+      .request({
+        method: HTTP_VERBS.PUT,
+        uri: this.url,
+        body: {
+          groups: [
+            {
+              sessions,
+            },
+          ],
+        },
+      })
+      .catch((error) => {
+        return Promise.reject(
+          boServiceErrorHandler(error, 'Breakouts#create --> Edit lock token mismatch')
+        );
+      });
+
+    if (breakInfo.body?.groups) {
+      this.set('groups', breakInfo.body.groups);
+    }
+
+    return Promise.resolve(breakInfo);
+  },
+
+  /**
+   * Delete all breakout sessions
+   * @returns {Promise}
+   */
+  async clearSessions() {
+    // @ts-ignore
+    const breakInfo = await this.webex
+      .request({
+        method: HTTP_VERBS.PUT,
+        uri: this.url,
+        body: {
+          groups: [
+            {
+              action: BREAKOUTS.ACTION.DELETE,
+            },
+          ],
+        },
+      })
+      .catch((error) => {
+        return Promise.reject(
+          boServiceErrorHandler(error, 'Breakouts#clearSessions --> Edit lock token mismatch')
+        );
+      });
+
+    if (breakInfo.body?.groups) {
+      this.set('groups', breakInfo.body.groups);
+    }
+
+    return Promise.resolve(breakInfo);
+  },
+
+  /**
    * Host or cohost starts breakout sessions
    * @param {object} params
    * @returns {Promise}
@@ -362,7 +439,7 @@ const Breakouts = WebexPlugin.extend({
   start(params = {}) {
     const action = BREAKOUTS.ACTION.START;
     const payload = {
-      id: this.breakoutGroupId || '',
+      id: this.breakoutGroupId,
       action,
       allowBackToMain: false,
       allowToJoinLater: false,
@@ -375,8 +452,13 @@ const Breakouts = WebexPlugin.extend({
       body: {
         groups: [payload],
       },
+    }).catch((error) => {
+      return Promise.reject(
+        boServiceErrorHandler(error, 'Breakouts#start --> Edit lock token mismatch')
+      );
     });
   },
+
   /**
    * Host or cohost ends breakout sessions
    * @param {object} params
@@ -398,22 +480,10 @@ const Breakouts = WebexPlugin.extend({
       body: {
         groups: [payload],
       },
-    });
-  },
-
-  /**
-   * Create new breakout session
-   * @param {object} sessions -- breakout session group
-   * @returns {Promise}
-   */
-  create(sessions) {
-    // @ts-ignore
-    return this.webex.request({
-      method: HTTP_VERBS.PUT,
-      uri: this.url,
-      body: {
-        groups: sessions,
-      },
+    }).catch((error) => {
+      return Promise.reject(
+        boServiceErrorHandler(error, 'Breakouts#end --> Edit lock token mismatch')
+      );
     });
   },
 
@@ -422,32 +492,17 @@ const Breakouts = WebexPlugin.extend({
    * @param {boolean} editlock -- lock operations of the breakout sessions
    * @returns {Promise}
    */
-  getBreakout(editlock) {
-    return this.request({
+  async getBreakout(editlock) {
+    const breakout = await this.request({
       method: HTTP_VERBS.GET,
       uri: this.url + (editlock ? `?editlock=${editlock}` : ''),
     });
-  },
 
-  /**
-   * delete breakout session
-   * @param {object} sessions
-   * @returns {Promise}
-   */
-  delete(sessions) {
-    // @ts-ignore
-    return this.webex.request({
-      method: HTTP_VERBS.PUT,
-      uri: this.url,
-      body: {
-        groups: [
-          {
-            action: 'DELETE',
-            sessions,
-          },
-        ],
-      },
-    });
+    if (breakout.body?.groups) {
+      this.set('groups', breakout.body.groups);
+    }
+
+    return breakout;
   },
 });
 
