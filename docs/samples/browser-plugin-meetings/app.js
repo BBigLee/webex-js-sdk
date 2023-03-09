@@ -1219,22 +1219,7 @@ function toggleBNR() {
     return;
   }
 
-  if (bnrEnabled) {
-    meeting.disableBNR().then((success) => {
-      if (success) {
-        bnrEnabled = false;
-        toggleBnrBtn.innerText = 'Enable BNR';
-      }
-    });
-  }
-  else {
-    meeting.enableBNR().then((success) => {
-      if (success) {
-        bnrEnabled = true;
-        toggleBnrBtn.innerText = 'Disable BNR';
-      }
-    });
-  }
+  console.log('BNR not supported');
 }
 
 let publishedLocalShareAudioTrack = null; // todo: stop and unset these on "unpublished" event (SPARK-399694)
@@ -1389,7 +1374,7 @@ function getLocalMediaSettings() {
   const meeting = getCurrentMeeting();
 
   if (meeting && meeting.mediaProperties.videoTrack) {
-    const videoSettings = meeting.mediaProperties.videoTrack.getSettings();
+    const videoSettings = meeting.mediaProperties.videoTrack?.underlyingTrack.getSettings();
     const {frameRate, height} = videoSettings;
 
     localVideoResElm.innerText = `${height}p ${Math.round(frameRate)}fps`;
@@ -1953,8 +1938,36 @@ async function getStatsForVideoPane(meeting, videoPane) {
   return result;
 }
 
+let remoteMediaIds = {};
+
+function setSizeHint() {
+  const sizeHintValue =  document.getElementById('size-hint-input').value;
+  const remoteMediaId = document.getElementById('remote-media-selector').value;
+
+  let [width, height] = sizeHintValue.split(',');
+
+  remoteMediaIds[remoteMediaId].setSizeHint(parseInt(width), parseInt(height))
+}
+
+function addRemoteMediaOption(remoteMedia) {
+  remoteMediaIds[remoteMedia.id] = remoteMedia;
+  const select = document.getElementById('remote-media-selector');
+
+  const option = document.createElement('option');
+  option.value = remoteMedia.id;
+  option.text = remoteMedia.id;
+
+  select.add(option);
+}
+
+function clearRemoteMedia() {
+  remoteMediaIds = {};
+}
+
 function processNewVideoPane(meeting, paneGroupId, paneId, remoteMedia) {
   const videoPane = allVideoPanes[paneGroupId][paneId];
+
+  addRemoteMediaOption(remoteMedia);
 
   videoPane.remoteMedia = remoteMedia;
   videoPane.videoEl.srcObject = remoteMedia.stream;
@@ -2048,6 +2061,7 @@ function setupMultistreamEventListeners(meeting) {
     console.log('memberVideoPanes:', memberVideoPanes);
     console.log('screenShareVideo:', screenShareVideo);
 
+    clearRemoteMedia();
     currentVideoPaneList.length = 0;
     clearAllMultistreamVideoElements();
     createVideoElementsForLayout(layoutId);

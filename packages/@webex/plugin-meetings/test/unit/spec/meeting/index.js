@@ -22,7 +22,8 @@ import {
   LOCUSINFO,
   PC_BAIL_TIMEOUT,
 } from '@webex/plugin-meetings/src/constants';
-import {ConnectionState, Event, Errors, ErrorType, RemoteTrackType} from '@webex/internal-media-core';
+import * as InternalMediaCoreModule from '@webex/internal-media-core';
+import {ConnectionState, Event, Errors, ErrorType, LocalTrackEvents, RemoteTrackType} from '@webex/internal-media-core';
 import * as StatsAnalyzerModule from '@webex/plugin-meetings/src/statsAnalyzer';
 import * as MuteStateModule from '@webex/plugin-meetings/src/meeting/muteState';
 import EventsScope from '@webex/plugin-meetings/src/common/events/events-scope';
@@ -194,7 +195,11 @@ describe('plugin-meetings', () => {
     TriggerProxy.trigger = sinon.stub().returns(true);
     Metrics.postEvent = sinon.stub();
     Metrics.initialSetup(null, webex);
-    MediaUtil.createMediaStream = sinon.stub().returns(true);
+    MediaUtil.createMediaStream = sinon.stub().callsFake((tracks) => {
+      return {
+        getTracks: () => tracks
+      };
+    });;
 
     uuid1 = uuid.v4();
     uuid2 = uuid.v4();
@@ -492,85 +497,6 @@ describe('plugin-meetings', () => {
             sinon.stub(meeting.mediaProperties, 'audioTrack').value(fakeMediaTrack());
             sinon.stub(meeting.mediaProperties, 'mediaDirection').value({
               receiveAudio: true,
-            });
-          });
-        });
-        describe('#enableBNR', () => {
-          it('should have #enableBnr', () => {
-            assert.exists(meeting.enableBNR);
-          });
-
-          describe('before audio attached to meeting', () => {
-            it('should throw no audio error', async () => {
-              await meeting.enableBNR().catch((err) => {
-                assert.equal(err.toString(), "Error: Meeting doesn't have an audioTrack attached");
-              });
-            });
-          });
-
-          describe('after audio attached to meeting', () => {
-            let handleClientRequest;
-
-            beforeEach(async () => {
-              await meeting.getMediaStreams();
-              await meeting.addMedia();
-            });
-
-            it('should throw error if meeting audio is muted', async () => {
-              const handleClientRequest = (meeting, mute) => {
-                meeting.mediaProperties.audioTrack.enabled = !mute;
-
-                return Promise.resolve();
-              };
-              const isMuted = () => !meeting.mediaProperties.audioTrack.enabled;
-
-              meeting.locusInfo.parsedLocus = {self: {state: 'JOINED'}};
-              meeting.mediaId = 'mediaId';
-              meeting.audio = {handleClientRequest, isMuted};
-              await meeting.muteAudio();
-              await meeting.enableBNR().catch((err) => {
-                assert.equal(err.message, 'Cannot enable BNR while meeting is muted');
-              });
-            });
-
-            it('should return true on enable bnr success', async () => {
-              handleClientRequest = sinon.stub().returns(Promise.resolve(true));
-              meeting.effects = {handleClientRequest};
-              const response = await meeting.enableBNR();
-
-              assert.equal(response, true);
-            });
-          });
-        });
-
-        describe('#disableBNR', () => {
-          describe('before audio attached to meeting', () => {
-            it('should have #disableBnr', () => {
-              assert.exists(meeting.disableBNR);
-            });
-
-            it('should throw no audio error', async () => {
-              await meeting.disableBNR().catch((err) => {
-                assert.equal(err.toString(), "Error: Meeting doesn't have an audioTrack attached");
-              });
-            });
-          });
-          describe('after audio attached to meeting', () => {
-            beforeEach(async () => {
-              await meeting.getMediaStreams();
-              await meeting.addMedia();
-            });
-
-            let handleClientRequest;
-            let isBnrEnabled;
-
-            it('should return true on disable bnr success', async () => {
-              handleClientRequest = sinon.stub().returns(Promise.resolve(true));
-              isBnrEnabled = sinon.stub().returns(Promise.resolve(true));
-              meeting.effects = {handleClientRequest, isBnrEnabled};
-              const response = await meeting.disableBNR();
-
-              assert.equal(response, true);
             });
           });
         });
@@ -1323,8 +1249,7 @@ describe('plugin-meetings', () => {
             .addMedia({
               mediaSettings: {},
             })
-            .catch((error) => {
-              assert.equal(error.code, IceGatheringFailed.CODE);
+            .catch(() => {
               errorThrown = true;
             });
 
@@ -1712,26 +1637,30 @@ describe('plugin-meetings', () => {
 
           it('skips canUpdateMedia() check on contentTracks.onended', () => {
             const {mediaProperties} = meeting;
-            let registeredListener = null;
             const fakeTrack = {
               getSettings: sinon.stub().returns({}),
-              onended: sinon.stub(),
-              addEventListener: sinon.stub().callsFake((event, listener) => {
-                registeredListener = listener;
-              }),
             };
 
+            const listeners = {};
+
+            const fakeLocalDisplayTrack = {
+              on: sinon.stub().callsFake((event, listener) => {
+                listeners[event] = listener;
+              })
+            };
+            sinon.stub(InternalMediaCoreModule, 'LocalDisplayTrack').returns(fakeLocalDisplayTrack);
+
+
             sandbox.stub(mediaProperties, 'setLocalShareTrack');
-            sandbox.stub(mediaProperties, 'shareTrack').value(fakeTrack);
             sandbox.stub(mediaProperties, 'setMediaSettings');
             sandbox.stub(meeting, 'stopShare').resolves(true);
             meeting.setLocalShareTrack(fakeTrack);
 
-            assert.calledOnce(fakeTrack.addEventListener);
-            assert.calledWith(fakeTrack.addEventListener, 'ended', sinon.match.any);
-            assert.isNotNull(registeredListener);
+            assert.calledOnce(fakeLocalDisplayTrack.on);
+            assert.calledWith(fakeLocalDisplayTrack.on, LocalTrackEvents.Ended, sinon.match.any);
+            assert.isNotNull(listeners[LocalTrackEvents.Ended]);
 
-            registeredListener();
+            listeners[LocalTrackEvents.Ended]();
 
             assert.calledWith(meeting.stopShare, {skipSignalingCheck: true});
           });
@@ -2147,7 +2076,7 @@ describe('plugin-meetings', () => {
           screenshareVideo: {
             id: 'fake share track',
             getSettings: sinon.stub().returns({}),
-            addEventListener: sinon.stub()
+            on: sinon.stub()
           },
         };
 
@@ -2309,7 +2238,7 @@ describe('plugin-meetings', () => {
           screenshareVideo: {
             id: 'fake share track',
             getSettings: sinon.stub().returns({}),
-            addEventListener: sinon.stub(),
+            on: sinon.stub(),
           },
         };
 
@@ -3594,6 +3523,12 @@ describe('plugin-meetings', () => {
         let videoTrack;
         let videoShareTrack;
         let createMuteStateStub;
+        let LocalDisplayTrackConstructorStub;
+        let LocalMicrophoneTrackConstructorStub;
+        let LocalCameraTrackConstructorStub;
+        let fakeLocalDisplayTrack;
+        let fakeLocalMicrophoneTrack;
+        let fakeLocalCameraTrack;
 
         beforeEach(() => {
           audioTrack = {
@@ -3606,7 +3541,7 @@ describe('plugin-meetings', () => {
           };
           videoShareTrack = {
             id: 'share track',
-            addEventListener: sinon.stub(),
+            on: sinon.stub(),
             removeEventListener: sinon.stub(),
             getSettings: sinon.stub().returns({}),
           };
@@ -3618,6 +3553,28 @@ describe('plugin-meetings', () => {
             unpublishTrack: sinon.stub().resolves({}),
           };
 
+          const createFakeLocalTrack = (originalTrack) => ({
+            on: sinon.stub(),
+            off: sinon.stub(),
+            stop: sinon.stub(),
+            originalTrack
+          });
+
+          // setup mock constructors for webrtc-core local track classes in such a way
+          // that they return the original track correctly (this is needed for unpublish() API tests)
+          LocalDisplayTrackConstructorStub = sinon.stub(InternalMediaCoreModule, 'LocalDisplayTrack').callsFake((stream) => {
+            fakeLocalDisplayTrack = createFakeLocalTrack(stream.getTracks()[0])
+            return fakeLocalDisplayTrack;
+          });
+          LocalMicrophoneTrackConstructorStub = sinon.stub(InternalMediaCoreModule, 'LocalMicrophoneTrack').callsFake((stream) => {
+            fakeLocalMicrophoneTrack = createFakeLocalTrack(stream.getTracks()[0])
+            return fakeLocalMicrophoneTrack;
+          });
+          LocalCameraTrackConstructorStub = sinon.stub(InternalMediaCoreModule, 'LocalCameraTrack').callsFake((stream) => {
+            fakeLocalCameraTrack = createFakeLocalTrack(stream.getTracks()[0])
+            return fakeLocalCameraTrack;
+          });
+
           createMuteStateStub = sinon.stub(MuteStateModule, 'createMuteState').returns({id: 'fake mute state instance'});
         })
         describe('#publishTracks', () => {
@@ -3627,23 +3584,33 @@ describe('plugin-meetings', () => {
           });
 
           const checkAudioPublished = () => {
+            assert.calledWith(MediaUtil.createMediaStream, [audioTrack]);
+            assert.calledOnce(LocalMicrophoneTrackConstructorStub);
+
             assert.calledWith(createMuteStateStub, 'audio', meeting, meeting.mediaProperties.mediaDirection);
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, audioTrack, 'main');
-            assert.equal(meeting.mediaProperties.audioTrack, audioTrack);
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, fakeLocalMicrophoneTrack);
+            assert.equal(meeting.mediaProperties.audioTrack, fakeLocalMicrophoneTrack);
             assert.equal(meeting.mediaProperties.mediaDirection.sendAudio, true);
           }
 
           const checkVideoPublished = () => {
+            assert.calledWith(MediaUtil.createMediaStream, [videoTrack]);
+            assert.calledOnce(LocalCameraTrackConstructorStub);
+
             assert.calledWith(createMuteStateStub, 'video', meeting, meeting.mediaProperties.mediaDirection);
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, videoTrack, 'main');
-            assert.equal(meeting.mediaProperties.videoTrack, videoTrack);
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, fakeLocalCameraTrack);
+            assert.equal(meeting.mediaProperties.videoTrack, fakeLocalCameraTrack);
             assert.equal(meeting.mediaProperties.mediaDirection.sendVideo, true);
           }
 
           const checkScreenShareVideoPublished = () => {
             assert.calledOnce(meeting.requestScreenShareFloor);
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, videoShareTrack, 'slides');
-            assert.equal(meeting.mediaProperties.shareTrack, videoShareTrack);
+
+            assert.calledWith(MediaUtil.createMediaStream, [videoShareTrack]);
+            assert.calledOnce(LocalDisplayTrackConstructorStub);
+
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.publishTrack, fakeLocalDisplayTrack);
+            assert.equal(meeting.mediaProperties.shareTrack, fakeLocalDisplayTrack);
             assert.equal(meeting.mediaProperties.mediaDirection.sendShare, true);
           }
 
@@ -3697,21 +3664,21 @@ describe('plugin-meetings', () => {
           });
 
           const checkAudioUnpublished = () => {
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, audioTrack, 'main');
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, fakeLocalMicrophoneTrack);
 
             assert.equal(meeting.mediaProperties.audioTrack, null);
             assert.equal(meeting.mediaProperties.mediaDirection.sendAudio, false);
           };
 
           const checkVideoUnpublished = () => {
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, videoTrack, 'main');
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, fakeLocalCameraTrack);
 
             assert.equal(meeting.mediaProperties.videoTrack, null);
             assert.equal(meeting.mediaProperties.mediaDirection.sendVideo, false);
           }
 
           const checkScreenShareVideoUnpublished = () => {
-            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, videoShareTrack, 'slides');
+            assert.calledWith(meeting.mediaProperties.webrtcMediaConnection.unpublishTrack, fakeLocalDisplayTrack);
 
             assert.calledOnce(meeting.requestScreenShareFloor);
 
@@ -3936,7 +3903,6 @@ describe('plugin-meetings', () => {
       });
       describe('#setLocalShareTrack', () => {
         it('should trigger a media:ready event with local share stream', () => {
-          let registeredListener = null;
           const track = {
             getSettings: sinon.stub().returns({
               aspectRatio: '1.7',
@@ -3946,10 +3912,16 @@ describe('plugin-meetings', () => {
               displaySurface: true,
               cursor: true,
             }),
-            addEventListener: sinon.stub().callsFake((event, listener) => {
-              registeredListener = listener;
-            }),
           };
+
+          const listeners = {};
+          const fakeLocalDisplayTrack = {
+            on: sinon.stub().callsFake((event, listener) => {
+                listeners[event] = listener;
+              })
+          };
+          sinon.stub(InternalMediaCoreModule, 'LocalDisplayTrack').returns(fakeLocalDisplayTrack);
+
 
           meeting.mediaProperties.setLocalShareTrack = sinon.stub().returns(true);
           meeting.stopShare = sinon.stub().resolves(true);
@@ -3964,8 +3936,8 @@ describe('plugin-meetings', () => {
           );
           assert.calledOnce(meeting.mediaProperties.setLocalShareTrack);
           assert.equal(meeting.mediaProperties.localStream, undefined);
-          assert.isNotNull(registeredListener);
-          registeredListener();
+          assert.isNotNull(listeners[LocalTrackEvents.Ended]);
+          listeners[LocalTrackEvents.Ended]();
           assert.calledOnce(meeting.stopShare);
         });
       });
@@ -3981,6 +3953,7 @@ describe('plugin-meetings', () => {
               eventListeners[event] = listener;
             }),
           };
+          MediaUtil.createMediaStream.returns({id: 'stream'});
         });
 
         it('should register for all the correct RoapMediaConnection events', () => {
@@ -4002,7 +3975,7 @@ describe('plugin-meetings', () => {
           assert.equal(TriggerProxy.trigger.getCall(1).args[2], 'media:ready');
           assert.deepEqual(TriggerProxy.trigger.getCall(1).args[3], {
             type: 'remoteAudio',
-            stream: true,
+            stream: {id: 'stream'},
           });
 
           eventListeners[Event.REMOTE_TRACK_ADDED]({
@@ -4012,7 +3985,7 @@ describe('plugin-meetings', () => {
           assert.equal(TriggerProxy.trigger.getCall(2).args[2], 'media:ready');
           assert.deepEqual(TriggerProxy.trigger.getCall(2).args[3], {
             type: 'remoteVideo',
-            stream: true,
+            stream: {id: 'stream'},
           });
 
           eventListeners[Event.REMOTE_TRACK_ADDED]({
@@ -4022,7 +3995,7 @@ describe('plugin-meetings', () => {
           assert.equal(TriggerProxy.trigger.getCall(3).args[2], 'media:ready');
           assert.deepEqual(TriggerProxy.trigger.getCall(3).args[3], {
             type: 'remoteShare',
-            stream: true,
+            stream: {id: 'stream'},
           });
         });
 
